@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-title" content="Autocue">
+<meta name="theme-color" content="#0f2340">
+<title>Dom Autocue</title>
+<!-- Dom Autocue (Simon, 16 Nov 2026): a teleprompter that follows the voice. The best of PromptSmart's VoiceTrack and
+     Speakflow, built for Simon's iPad, phone and MacBook Air, speaking to camera. One self-contained page, published with
+     the Dom app (update-dom). Scripts and settings stay on the device (localStorage); nothing is sent to the vault or GitHub.
+     While listening, the browser's own speech service hears the audio: Apple's in Safari, Google's in Chrome.
+     How it follows: each heard phrase is matched against the next stretch of the script; the reading line moves only on a
+     match, so it waits when you pause or go off script and picks you up when you come back. -->
+<style>
+:root{
+  --navy-deep:#0f2340;--navy:#16325c;--blue:#2f5ea8;--sky:#8fb8f0;--orange:#e8743b;
+  --ink:#1a2233;--muted:#5a6678;--line:#d6dfeb;--paper:#f4f6f9;--card:#fff;--tint:#eef2f8;
+  --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Calibri,Arial,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{font-family:var(--font);background:var(--paper);color:var(--ink);-webkit-text-size-adjust:100%}
+button,select,input,textarea{font:inherit}
+.hidden{display:none!important}
+
+/* The editor */
+#editor{max-width:900px;margin:0 auto;padding:max(16px,env(safe-area-inset-top)) 16px 32px}
+.top{display:flex;align-items:center;gap:10px;background:linear-gradient(135deg,var(--navy-deep),var(--navy));color:#fff;
+  border-radius:14px;padding:12px 16px;margin-bottom:14px}
+.top h1{font-size:18pt;margin:0;font-weight:800;flex:1}
+.top .sub{font-size:9pt;color:var(--sky)}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0 0 10px}
+select,input[type=text]{border:1px solid var(--line);border-radius:10px;padding:9px 10px;background:#fff;min-width:0}
+select{flex:1}
+#title{flex:1;font-weight:700}
+.btn{border:1px solid var(--line);background:#fff;color:var(--navy);border-radius:10px;padding:9px 14px;font-weight:700;cursor:pointer}
+.btn.primary{background:var(--navy);border-color:var(--navy);color:#fff}
+.btn.go{background:var(--orange);border-color:var(--orange);color:#fff;font-size:14pt;padding:12px 26px}
+textarea{width:100%;min-height:42vh;border:1px solid var(--line);border-radius:12px;padding:14px;font-size:13pt;line-height:1.5;resize:vertical;background:#fff}
+.info{font-size:10pt;color:var(--muted);margin:6px 2px 14px}
+.panel{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:0 0 12px}
+.panel h2{font-size:9pt;letter-spacing:1.4px;text-transform:uppercase;color:var(--muted);margin:0 0 8px}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 18px}
+.field{display:flex;flex-direction:column;gap:4px;font-size:10pt;color:var(--muted)}
+.field b{color:var(--ink);font-weight:700}
+.seg{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.seg button{flex:1;border:0;background:#fff;padding:8px 6px;color:var(--navy);font-weight:700;cursor:pointer}
+.seg button.on{background:var(--navy);color:#fff}
+input[type=range]{width:100%}
+.check{display:flex;gap:8px;align-items:center;font-size:10.5pt;color:var(--ink)}
+.note{font-size:9pt;color:var(--muted);margin-top:8px}
+.startbar{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+@media (max-width:560px){.grid{grid-template-columns:1fr}.top h1{font-size:15pt}}
+
+/* How to use it */
+details.help{background:#fff;border:1px solid var(--line);border-left:4px solid var(--orange);border-radius:12px;padding:10px 14px;margin:0 0 12px}
+details.help summary{font-weight:800;color:var(--navy);cursor:pointer;list-style:none}
+details.help summary::-webkit-details-marker{display:none}
+details.help summary::after{content:" +";color:var(--orange)} details.help[open] summary::after{content:" −"}
+details.help ol{margin:8px 0 4px;padding-left:20px;line-height:1.45;font-size:11pt} details.help li{margin:0 0 7px}
+details.help .tip{font-size:10pt;color:var(--muted);margin:6px 0 2px}
+
+/* The prompter */
+#prompter{position:fixed;inset:0;background:#000;color:#fff;overflow:hidden}
+#prompter.light{background:#fff;color:#111}
+#scroller{position:absolute;inset:0;overflow-y:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+#scroller::-webkit-scrollbar{display:none}
+#text{margin:0 auto;padding:0 24px;font-weight:600;letter-spacing:.2px}
+#text p{margin:0 0 .9em}
+#text .w{transition:color .25s;cursor:pointer;border-radius:4px}
+#text .w.said{color:#6f7b8c}
+#prompter.light #text .w.said{color:#a0a8b4}
+#text .w.now{color:var(--orange)}
+#text .cue{color:var(--sky);font-style:italic;font-weight:500;font-size:.62em;display:inline-block}
+#prompter.light #text .cue{color:var(--blue)}
+#text b,#text strong{color:inherit;text-decoration:underline;text-decoration-color:var(--orange);text-underline-offset:.15em}
+.mirror #text{transform:scaleX(-1)} .flip #text{transform:scaleY(-1)} .mirror.flip #text{transform:scale(-1,-1)}
+#marker{position:absolute;left:4px;width:0;height:0;border-top:12px solid transparent;border-bottom:12px solid transparent;border-left:16px solid var(--orange);pointer-events:none;opacity:.9}
+#band{position:absolute;left:0;right:0;height:2px;background:rgba(232,116,59,.25);pointer-events:none}
+#hud{position:absolute;left:0;right:0;bottom:0;padding:10px 12px calc(10px + env(safe-area-inset-bottom));display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;
+  background:linear-gradient(transparent,rgba(0,0,0,.75) 40%);transition:opacity .4s}
+#prompter.light #hud{background:linear-gradient(transparent,rgba(255,255,255,.85) 40%)}
+#hud.fade{opacity:0;pointer-events:none}
+#hud button{background:rgba(255,255,255,.14);color:#fff;border:0;border-radius:999px;padding:10px 15px;font-weight:700;cursor:pointer;min-width:46px}
+#prompter.light #hud button{background:var(--tint);color:var(--navy)}
+#hud button.main{background:var(--orange);color:#fff;min-width:96px}
+#status{font-size:10pt;font-weight:700;display:flex;align-items:center;gap:6px;min-width:120px;justify-content:center}
+#dot{width:10px;height:10px;border-radius:50%;background:#888}
+#dot.on{background:#3ccf7a;box-shadow:0 0 0 0 rgba(60,207,122,.6);animation:pulse 1.6s infinite}
+#dot.warn{background:var(--orange)}
+@keyframes pulse{70%{box-shadow:0 0 0 9px rgba(60,207,122,0)}100%{box-shadow:0 0 0 0 rgba(60,207,122,0)}}
+#clock{font-size:10pt;font-variant-numeric:tabular-nums;opacity:.85;min-width:110px;text-align:center}
+#progress{position:absolute;top:0;left:0;height:3px;background:var(--orange);width:0;transition:width .3s}
+#count{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:30vmin;font-weight:800;color:var(--orange);pointer-events:none}
+#cam{position:absolute;top:calc(10px + env(safe-area-inset-top));right:10px;width:22vmin;max-width:180px;border-radius:12px;transform:scaleX(-1);border:2px solid rgba(255,255,255,.3);background:#111}
+#rec{position:absolute;top:calc(14px + env(safe-area-inset-top));left:14px;font-size:10pt;font-weight:800;color:#ff4d4d;letter-spacing:1px}
+#saved{position:fixed;left:50%;top:40%;transform:translate(-50%,-50%);background:#fff;color:var(--ink);border-radius:14px;padding:18px 20px;box-shadow:0 10px 30px rgba(0,0,0,.35);text-align:center;max-width:90vw;z-index:9}
+#saved a{display:inline-block;margin-top:10px}
+</style></head>
+<body>
+
+<div id="editor">
+  <div class="top"><div style="flex:1"><h1>Autocue</h1><div class="sub">Dom · it follows your voice</div></div></div>
+
+  <details class="help" id="howto"><summary>How to use it</summary>
+    <ol>
+      <li><b>Put your script in.</b> Tap <b>New</b>, give it a title, then either tap <b>Paste</b> (it takes what you've copied, from an email, Notes or a message from Dom), type it, or tap <b>Open a file</b> to pick a <code>.txt</code> or <code>.md</code> from Files. Ask Dom to "write me an autocue script for ..." and it comes back ready to copy.</li>
+      <li><b>Mark it up, if you like.</b> A blank line starts a new paragraph. <code>[pause]</code> or any words in square brackets are notes to yourself: shown small, never read. <code>**two stars**</code> either side of a word underlines it to stress.</li>
+      <li><b>Set it up for the camera.</b> Prop the iPad or phone just below the lens. Reading line at <b>Top</b>, column about 60%, text big enough to read from where you sit. The time it'll take shows under the script.</li>
+      <li><b>Tap Start.</b> Allow the microphone the first time. It counts you in, 3, 2, 1, and then you just talk.</li>
+      <li><b>Speak at your own pace.</b> The words you've said go grey and the line moves up with you. Stop to think and it waits. Go off script and it holds your place, then picks you up when you come back to the words.</li>
+      <li><b>If you need to,</b> tap any word to jump there, use the arrows to go back or on a line, or <b>Pause</b>. The buttons fade while you speak; tap the screen to bring them back.</li>
+      <li><b>Tap Done</b> at the end. If you ticked Record, you'll be offered the video to save or share.</li>
+    </ol>
+    <div class="tip">If it doesn't follow you: open it in Safari (not from a Home Screen icon), check Siri and Dictation are on in Settings, or switch to Steady scroll and set the speed. On the Mac: space starts and pauses, the arrows move a line, Esc stops.</div>
+  </details>
+  <div class="row">
+    <select id="pick" aria-label="Your scripts"></select>
+    <button class="btn" id="new">New</button>
+    <button class="btn" id="paste">Paste</button>
+    <button class="btn" id="del">Delete</button>
+  </div>
+  <div class="row">
+    <input type="text" id="title" placeholder="Script title" aria-label="Script title">
+    <label class="btn" style="margin:0">Open a file<input type="file" id="file" accept=".txt,.md,text/plain,text/markdown" class="hidden"></label>
+  </div>
+  <textarea id="script" placeholder="Paste or type your script.
+A blank line starts a new paragraph.
+[Words in square brackets] are cues to yourself: shown small, never read.
+**Two stars** either side underline a word to stress."></textarea>
+  <div class="info" id="info"></div>
+
+  <div class="panel"><h2>How it follows you</h2>
+    <div class="grid">
+      <div class="field"><b>Follow</b><div class="seg" id="mode"><button data-v="voice">My voice</button><button data-v="steady">Steady scroll</button></div></div>
+      <div class="field"><b>Steady speed: <span id="wpmv"></span> words a minute</b><input type="range" id="wpm" min="80" max="220" step="5"></div>
+      <div class="field"><b>Reading line</b><div class="seg" id="line"><button data-v="0.18">Top</button><button data-v="0.3">Third</button><button data-v="0.45">Middle</button></div></div>
+      <label class="check"><input type="checkbox" id="countdown"> Count me in (3, 2, 1)</label>
+    </div>
+    <div class="note" id="voicenote"></div>
+  </div>
+
+  <div class="panel"><h2>How it looks</h2>
+    <div class="grid">
+      <div class="field"><b>Text size: <span id="sizev"></span></b><input type="range" id="size" min="24" max="110" step="2"></div>
+      <div class="field"><b>Column width: <span id="widthv"></span>%</b><input type="range" id="width" min="40" max="100" step="5"></div>
+      <div class="field"><b>Line spacing: <span id="lhv"></span></b><input type="range" id="lh" min="1.1" max="2" step="0.05"></div>
+      <div class="field"><b>Colours</b><div class="seg" id="theme"><button data-v="dark">White on black</button><button data-v="light">Black on white</button></div></div>
+      <label class="check"><input type="checkbox" id="mirror"> Mirror (for a glass rig)</label>
+      <label class="check"><input type="checkbox" id="flip"> Upside down</label>
+    </div>
+    <div class="note">For speaking to camera: reading line at the top, column narrow (about 60%), so your eyes stay near the lens.</div>
+  </div>
+
+  <div class="panel"><h2>Record</h2>
+    <label class="check"><input type="checkbox" id="record"> Record video from the front camera while I read</label>
+    <div class="note">The video stays on this device: you save it at the end. On the iPad and phone, test this once before a real take; if listening stops while recording, use Steady scroll for recorded takes.</div>
+  </div>
+
+  <div class="startbar">
+    <div class="info" style="margin:0">Keys: space start or pause · arrows back and on · + and − text size · M mirror · Esc stop. A tap on any word jumps there.</div>
+    <button class="btn go" id="start">Start</button>
+  </div>
+</div>
+
+<div id="prompter" class="hidden">
+  <div id="scroller"><div id="text"></div></div>
+  <div id="band"></div><div id="marker"></div>
+  <div id="progress"></div>
+  <video id="cam" class="hidden" playsinline muted></video>
+  <div id="rec" class="hidden">● REC</div>
+  <div id="count" class="hidden"></div>
+  <div id="hud">
+    <button id="back" aria-label="Back a line">↑</button>
+    <button id="play" class="main">Pause</button>
+    <button id="fwd" aria-label="On a line">↓</button>
+    <button id="smaller" aria-label="Smaller text">A−</button>
+    <button id="bigger" aria-label="Bigger text">A+</button>
+    <div id="status"><span id="dot"></span><span id="stext">Ready</span></div>
+    <div id="clock">0:00</div>
+    <button id="stop">Done</button>
+  </div>
+</div>
+<div id="saved" class="hidden"></div>
+
+<script>
+"use strict";
+/* ---------- storage: this device only, never fatal ---------- */
+const store={get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},
+             set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
+const $=id=>document.getElementById(id);
+const DEF={mode:"voice",wpm:140,line:"0.18",countdown:true,size:52,width:62,lh:1.35,theme:"dark",mirror:false,flip:false,record:false};
+let S=Object.assign({},DEF,store.get("autocue-settings",{}));
+let scripts=store.get("autocue-scripts",null);
+if(!Array.isArray(scripts)||!scripts.length){
+  scripts=[{id:"s"+Date.now(),title:"A first script",text:"Good morning. This is a test of the Dom autocue.\n\nAs I speak, the words I've said go grey and the line moves up with me. If I stop to think, it waits for me. [pause]\n\nIf I go off script for a moment, it holds where I was, and picks me up again when I come back to the words on the page.\n\nThat's the **whole idea**: I keep my eyes near the camera and talk at my own pace."}];
+}
+let cur=store.get("autocue-current",scripts[0].id);
+if(!scripts.find(s=>s.id===cur)) cur=scripts[0].id;
+const saveAll=()=>{store.set("autocue-scripts",scripts);store.set("autocue-current",cur);store.set("autocue-settings",S)};
+
+/* ---------- the editor ---------- */
+function curScript(){return scripts.find(s=>s.id===cur)}
+function fillPick(){
+  $("pick").innerHTML="";
+  scripts.forEach(s=>{const o=document.createElement("option");o.value=s.id;o.textContent=s.title||"Untitled";if(s.id===cur)o.selected=true;$("pick").appendChild(o)});
+  const s=curScript();$("title").value=s.title;$("script").value=s.text;info();
+}
+function countWords(t){return (t.replace(/\[[^\]]*\]/g," ").match(/[A-Za-z0-9£$€%'’]+/g)||[]).length}
+function fmt(sec){sec=Math.max(0,Math.round(sec));return Math.floor(sec/60)+":"+String(sec%60).padStart(2,"0")}
+function info(){const n=countWords($("script").value);$("info").textContent=n+" words · about "+fmt(n/S.wpm*60)+" at "+S.wpm+" words a minute"}
+$("pick").onchange=()=>{cur=$("pick").value;saveAll();fillPick()};
+$("new").onclick=()=>{const s={id:"s"+Date.now(),title:"New script",text:""};scripts.unshift(s);cur=s.id;saveAll();fillPick();$("script").focus()};
+$("paste").onclick=async()=>{
+  let t="";try{t=await navigator.clipboard.readText()}catch(e){}
+  if(!t){$("script").focus();alert("Nothing to paste. Copy your script first, or press and hold in the box and choose Paste.");return}
+  const s=curScript();if(s.text.trim()){const n={id:"s"+Date.now(),title:"Pasted script",text:""};scripts.unshift(n);cur=n.id}
+  curScript().text=t.replace(/\r\n/g,"\n");saveAll();fillPick()};
+$("del").onclick=()=>{if(scripts.length<2){$("script").value="";curScript().text="";saveAll();info();return}
+  if(!confirm("Delete \""+(curScript().title||"Untitled")+"\" from this device?"))return;
+  scripts=scripts.filter(s=>s.id!==cur);cur=scripts[0].id;saveAll();fillPick()};
+$("title").oninput=()=>{curScript().title=$("title").value;saveAll();const o=$("pick").selectedOptions[0];if(o)o.textContent=$("title").value||"Untitled"};
+$("script").oninput=()=>{curScript().text=$("script").value;saveAll();info()};
+$("file").onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();
+  r.onload=()=>{const s={id:"s"+Date.now(),title:f.name.replace(/\.(md|txt)$/i,""),text:String(r.result).replace(/^---[\s\S]*?---\s*/,"")};scripts.unshift(s);cur=s.id;saveAll();fillPick()};r.readAsText(f)};
+
+function seg(id,key,after){const el=$(id);const paint=()=>[...el.children].forEach(b=>b.classList.toggle("on",String(S[key])===b.dataset.v));
+  el.onclick=e=>{const b=e.target.closest("button");if(!b)return;S[key]=b.dataset.v;saveAll();paint();after&&after()};paint()}
+function range(id,key,lab,f){const el=$(id);el.value=S[key];const p=()=>{$(lab).textContent=f?f(S[key]):S[key]};p();
+  el.oninput=()=>{S[key]=Number(el.value);saveAll();p();if(id==="wpm")info()}}
+function check(id,key){const el=$(id);el.checked=!!S[key];el.onchange=()=>{S[key]=el.checked;saveAll()}}
+seg("mode","mode",voiceNote);seg("line","line");seg("theme","theme");
+range("wpm","wpm","wpmv");range("size","size","sizev",v=>v+" px");range("width","width","widthv");range("lh","lh","lhv",v=>Number(v).toFixed(2));
+check("countdown","countdown");check("mirror","mirror");check("flip","flip");check("record","record");
+
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+function voiceNote(){
+  const ua=navigator.userAgent, chrome=/Chrome\//.test(ua)&&!/Edg\//.test(ua), standalone=window.navigator.standalone===true;
+  let t;
+  if(!SR) t="This browser can't listen. Use Safari on the iPad or phone, or Safari or Chrome on the Mac; Steady scroll works anywhere.";
+  else if(standalone) t="Opened from the Home Screen, iOS may not let the page listen. If it doesn't follow you, open it in Safari instead.";
+  else if(chrome) t="Chrome sends what it hears to Google's speech service while listening. Safari uses Apple's.";
+  else t="Safari uses Apple's speech service while listening (Siri and Dictation must be on in Settings).";
+  $("voicenote").textContent=t;
+}
+voiceNote();fillPick();
+if(!store.get("autocue-seen",false)){$("howto").open=true;store.set("autocue-seen",true)}
+
+/* ---------- words: matching what you say to the script ---------- */
+const NUM={zero:"0",one:"1",two:"2",three:"3",four:"4",five:"5",six:"6",seven:"7",eight:"8",nine:"9",ten:"10",eleven:"11",twelve:"12",twenty:"20",thirty:"30",forty:"40",fifty:"50",hundred:"100",thousand:"1000"};
+function norm(w){w=w.toLowerCase().replace(/[’']/g,"").replace(/[£$€,]/g,"").replace(/%$/,"");
+  w=w.replace(/[^a-z0-9.]/g,"").replace(/\.$/,"");return NUM[w]||w}
+function tokens(t){return (t.replace(/&/g," and ").replace(/%/g," percent ").match(/[A-Za-z0-9£$€.,'’]+/g)||[]).map(norm).filter(Boolean)}
+function lev1(a,b){ // edit distance at most 1?
+  if(Math.abs(a.length-b.length)>1)return false;let i=0,j=0,e=0;
+  while(i<a.length&&j<b.length){if(a[i]===b[j]){i++;j++;continue}if(++e>1)return false;
+    if(a.length>b.length)i++;else if(b.length>a.length)j++;else{i++;j++}}
+  return e+(a.length-i)+(b.length-j)<=1}
+function same(a,b){if(a===b)return true;if(a.length>=4&&b.length>=4&&(a.startsWith(b)||b.startsWith(a)))return true;
+  return a.length>=5&&b.length>=5&&lev1(a,b)}
+const STOP=new Set("the a an and of to in it is i at on for that this be we you as or so but".split(" "));
+
+let W=[];      // script words: {n: normalised, el}
+let pos=0;     // the next word to say
+/* Find where the last few words heard sit in the script, from just behind the reading line to well ahead of it.
+   Score: words matched in order (an LCS over a small window), less a little for distance. Move only on a clear match. */
+function locate(heard){
+  const K=Math.min(8,heard.length);if(!K)return -1;const tail=heard.slice(-K);
+  let best=-1,bestScore=0;
+  const lo=Math.max(0,pos-4),hi=Math.min(W.length-1,pos+40);
+  for(let e=lo;e<=hi;e++){
+    if(!same(tail[K-1],W[e].n)&&!(K>1&&same(tail[K-2],W[e].n)))continue;   // the window must end on a word just heard
+    const s0=Math.max(0,e-K-3),win=W.slice(s0,e+1).map(w=>w.n);
+    const L=Array(K+1).fill(0).map(()=>Array(win.length+1).fill(0));      // LCS, weighting content words over small ones
+    for(let i=1;i<=K;i++)for(let j=1;j<=win.length;j++)
+      L[i][j]=same(tail[i-1],win[j-1])?L[i-1][j-1]+(STOP.has(win[j-1])?0.5:1):Math.max(L[i-1][j],L[i][j-1]);
+    const sc=L[K][win.length]-Math.max(0,e-pos)*0.03;
+    if(sc>bestScore+1e-9){bestScore=sc;best=e}
+  }
+  const need=K>=3?2:1.5, near=best>=0&&best-pos<=4;
+  if(best<0)return -1;
+  if(bestScore>=need||(near&&bestScore>=1)) return best;
+  return -1;
+}
+function hear(text){ // text: what the speech service has heard in this stretch, newest last
+  const h=tokens(text);const e=locate(h);
+  if(e>=0&&e+1>pos){setPos(e+1);lastHeard=Date.now()}
+  else if(h.length)lastSound=Date.now();
+}
+
+/* ---------- the prompter ---------- */
+let running=false,paused=false,startedAt=0,pausedFor=0,pauseStart=0,lastHeard=0,lastSound=0,target=0,raf=0,rec=null,stream=null,chunks=[],wake=null;
+function build(){
+  const raw=curScript().text||"";W=[];const box=$("text");box.innerHTML="";
+  raw.split(/\n\s*\n/).forEach(par=>{
+    if(!par.trim())return;const p=document.createElement("p");
+    par.split(/(\[[^\]]*\])/).forEach(chunk=>{
+      if(/^\[[^\]]*\]$/.test(chunk)){const c=document.createElement("span");c.className="cue";c.textContent=chunk.slice(1,-1);p.appendChild(c);p.appendChild(document.createTextNode(" "));return}
+      chunk.split(/(\*\*[^*]+\*\*)/).forEach(part=>{
+        const bold=/^\*\*[^*]+\*\*$/.test(part);const txt=bold?part.slice(2,-2):part;
+        txt.split(/(\s+)/).forEach(tok=>{
+          if(!tok)return;if(/^\s+$/.test(tok)){p.appendChild(document.createTextNode(" "));return}
+          const n=tokens(tok);const sp=document.createElement(bold?"b":"span");sp.className="w";sp.textContent=tok;
+          if(n.length){n.forEach((x,k)=>{if(k===0){sp.dataset.i=W.length;W.push({n:x,el:sp})}else W.push({n:x,el:sp})})}
+          p.appendChild(sp);
+        });
+      });
+    });
+    box.appendChild(p);
+  });
+  if(!W.length){const p=document.createElement("p");p.textContent="(The script is empty.)";box.appendChild(p)}
+}
+function look(){
+  const P=$("prompter");P.classList.toggle("light",S.theme==="light");P.classList.toggle("mirror",!!S.mirror);P.classList.toggle("flip",!!S.flip);
+  const t=$("text");t.style.fontSize=S.size+"px";t.style.lineHeight=S.lh;t.style.maxWidth=S.width+"%";
+  const vh=$("scroller").clientHeight,y=vh*Number(S.line);
+  t.style.paddingTop=y+"px";t.style.paddingBottom=vh+"px";
+  $("marker").style.top=(y+S.size*S.lh/2-12)+"px";$("band").style.top=(y+S.size*S.lh/2)+"px";
+}
+function setPos(p){
+  p=Math.max(0,Math.min(W.length,p));
+  for(let i=Math.min(pos,p);i<Math.max(pos,p);i++)W[i].el.classList.toggle("said",i<p);
+  if(W[pos])W[pos].el.classList.remove("now");pos=p;if(W[pos])W[pos].el.classList.add("now");
+  aim();$("progress").style.width=(W.length?pos/W.length*100:0)+"%";
+}
+function aim(){const w=W[Math.min(pos,W.length-1)];if(!w)return;
+  const y=$("scroller").clientHeight*Number(S.line);target=Math.max(0,w.el.offsetTop-y)}
+function lineStep(dir){ // back or on by one line of text
+  const w=W[Math.min(pos,W.length-1)];if(!w)return;const top=w.el.offsetTop;let i=pos;
+  if(dir>0){while(i<W.length&&W[i].el.offsetTop<=top+2)i++}
+  else{while(i>0&&W[i-1].el.offsetTop>=top-2)i--;const prev=i>0?W[i-1].el.offsetTop:0;while(i>0&&W[i-1].el.offsetTop>=prev-2)i--}
+  setPos(i);if(S.mode==="steady")steadyY=target}
+let steadyY=0,lastT=0;
+function frame(t){
+  const sc=$("scroller");const dt=lastT?Math.min(100,t-lastT):16;lastT=t;
+  if(S.mode==="steady"&&running&&!paused){
+    const per=W.length?($("text").scrollHeight-sc.clientHeight*(1+Number(S.line)))/W.length:0;
+    steadyY+=S.wpm/60*per*dt/1000;sc.scrollTop=steadyY;
+    const y=sc.clientHeight*Number(S.line)+sc.scrollTop;let i=pos;while(i<W.length&&W[i].el.offsetTop<y)i++;if(i!==pos)setPos(i);
+  }else{
+    const d=target-sc.scrollTop;if(Math.abs(d)>0.5)sc.scrollTop+=d*Math.min(1,dt/1000*4); // eases to the line at your pace
+    steadyY=sc.scrollTop;
+  }
+  tick();raf=requestAnimationFrame(frame);
+}
+function tick(){
+  if(!running)return;const now=Date.now();const el=(now-startedAt-pausedFor-(paused?now-pauseStart:0))/1000;
+  const rate=pos>15&&el>5?pos/el:S.wpm/60;$("clock").textContent=fmt(el)+" · "+fmt((W.length-pos)/rate)+" left";
+  if(S.mode==="voice"&&!paused&&recog){
+    if(now-lastHeard>4000&&now-lastSound<2500)status("warn","Off script: waiting");
+    else if(listening)status("on","Following you");
+  }
+}
+function status(cls,txt){$("dot").className=cls||"";$("stext").textContent=txt}
+
+/* ---------- listening ---------- */
+let recog=null,listening=false,wantListen=false;
+function listen(){
+  if(!SR){status("warn","Can't listen here");return}
+  wantListen=true;if(recog){try{recog.start()}catch(e){}return}
+  recog=new SR();recog.lang="en-GB";recog.continuous=true;recog.interimResults=true;recog.maxAlternatives=1;
+  recog.onstart=()=>{listening=true;status("on","Listening")};
+  recog.onresult=e=>{let t="";const from=Math.max(0,e.results.length-3);for(let i=from;i<e.results.length;i++)t+=" "+e.results[i][0].transcript;hear(t)};
+  recog.onerror=e=>{if(e.error==="not-allowed"||e.error==="service-not-allowed"){wantListen=false;status("warn","Microphone blocked");}};
+  recog.onend=()=>{listening=false;if(wantListen&&running&&!paused)setTimeout(()=>{try{recog.start()}catch(e){}},150);else status("","Paused")};
+  try{recog.start()}catch(e){}
+}
+function hush(){wantListen=false;if(recog)try{recog.stop()}catch(e){}}
+
+/* ---------- recording ---------- */
+async function camOn(){
+  try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"user",width:{ideal:1920},height:{ideal:1080}},audio:true});
+    const v=$("cam");v.srcObject=stream;v.classList.remove("hidden");await v.play().catch(()=>{});return true}
+  catch(e){status("warn","No camera");return false}
+}
+function recStart(){if(!stream||!window.MediaRecorder)return;chunks=[];
+  const type=["video/mp4","video/webm;codecs=vp9,opus","video/webm"].find(t=>MediaRecorder.isTypeSupported&&MediaRecorder.isTypeSupported(t))||"";
+  try{rec=new MediaRecorder(stream,type?{mimeType:type}:{})}catch(e){rec=null;return}
+  rec.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data)};rec.start(1000);$("rec").classList.remove("hidden")}
+function recStop(){return new Promise(res=>{if(!rec||rec.state==="inactive")return res(null);
+  rec.onstop=()=>{const type=rec.mimeType||"video/mp4";res(new Blob(chunks,{type}))};rec.stop()})}
+function camOff(){if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;$("cam").classList.add("hidden");$("rec").classList.add("hidden")}
+async function offerVideo(blob){
+  if(!blob||!blob.size)return;const ext=/mp4/.test(blob.type)?"mp4":"webm";
+  const name=((curScript().title||"take").replace(/[^\w -]/g,"").trim()||"take")+" "+new Date().toISOString().slice(0,16).replace("T"," ").replace(":","")+"."+ext;
+  const file=new File([blob],name,{type:blob.type});const box=$("saved");box.classList.remove("hidden");
+  box.innerHTML="<b>Your take is ready</b><br>";
+  if(navigator.canShare&&navigator.canShare({files:[file]})){const b=document.createElement("button");b.className="btn primary";b.textContent="Save or share";
+    b.onclick=()=>navigator.share({files:[file]}).catch(()=>{});box.appendChild(b);box.appendChild(document.createTextNode(" "))}
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;a.className="btn";a.textContent="Download";box.appendChild(a);
+  const c=document.createElement("button");c.className="btn";c.textContent="Close";c.style.marginLeft="6px";c.onclick=()=>box.classList.add("hidden");box.appendChild(c);
+}
+
+/* ---------- start, pause, stop ---------- */
+async function start(){
+  build();$("editor").classList.add("hidden");$("prompter").classList.remove("hidden");look();
+  pos=0;W.forEach(w=>w.el.classList.remove("said","now"));setPos(0);$("scroller").scrollTop=0;steadyY=0;target=0;
+  try{if(document.documentElement.requestFullscreen&&!/iPhone|iPad/.test(navigator.userAgent))await document.documentElement.requestFullscreen()}catch(e){}
+  try{wake=await navigator.wakeLock.request("screen")}catch(e){}
+  let cam=false;if(S.record)cam=await camOn();
+  if(S.countdown){const c=$("count");c.classList.remove("hidden");for(const n of [3,2,1]){c.textContent=n;await new Promise(r=>setTimeout(r,800))}c.classList.add("hidden")}
+  running=true;paused=false;startedAt=Date.now();pausedFor=0;lastHeard=Date.now();$("play").textContent="Pause";
+  if(cam)recStart();
+  if(S.mode==="voice")listen();else status("on","Scrolling");
+  fadeLater();
+}
+function pause(){if(!running)return;paused=!paused;$("play").textContent=paused?"Go on":"Pause";
+  if(paused){pauseStart=Date.now();hush();status("","Paused")}else{pausedFor+=Date.now()-pauseStart;lastHeard=Date.now();if(S.mode==="voice")listen();else status("on","Scrolling")}}
+async function stop(){
+  running=false;hush();const blob=await recStop();camOff();
+  try{wake&&wake.release()}catch(e){}wake=null;
+  try{if(document.fullscreenElement)await document.exitFullscreen()}catch(e){}
+  $("prompter").classList.add("hidden");$("editor").classList.remove("hidden");status("","Ready");offerVideo(blob);
+}
+$("start").onclick=start;$("play").onclick=pause;$("stop").onclick=stop;
+$("back").onclick=()=>lineStep(-1);$("fwd").onclick=()=>lineStep(1);
+$("bigger").onclick=()=>{S.size=Math.min(110,S.size+4);saveAll();look();aim()};
+$("smaller").onclick=()=>{S.size=Math.max(24,S.size-4);saveAll();look();aim()};
+$("text").onclick=e=>{const w=e.target.closest(".w");if(w&&w.dataset.i!=null){setPos(Number(w.dataset.i));if(S.mode==="steady")steadyY=target;e.stopPropagation()}else showHud()};
+$("scroller").addEventListener("touchstart",()=>{if(S.mode==="steady"&&running)return;},{passive:true});
+let fadeT=0;function showHud(){$("hud").classList.remove("fade");fadeLater()}
+function fadeLater(){clearTimeout(fadeT);fadeT=setTimeout(()=>{if(running&&!paused)$("hud").classList.add("fade")},3500)}
+$("prompter").addEventListener("pointermove",showHud);
+window.addEventListener("resize",()=>{if(running){look();aim()}});
+document.addEventListener("keydown",e=>{
+  if($("prompter").classList.contains("hidden")){if(e.key==="Enter"&&(e.metaKey||e.ctrlKey))start();return}
+  const k=e.key;
+  if(k===" "||k==="k"){e.preventDefault();pause()}
+  else if(k==="ArrowDown"||k==="ArrowRight"||k==="PageDown"){e.preventDefault();lineStep(1)}
+  else if(k==="ArrowUp"||k==="ArrowLeft"||k==="PageUp"){e.preventDefault();lineStep(-1)}
+  else if(k==="+"||k==="="){$("bigger").click()}else if(k==="-"){$("smaller").click()}
+  else if(k==="m"||k==="M"){S.mirror=!S.mirror;saveAll();look()}
+  else if(k==="Escape"){stop()}
+  showHud();
+});
+requestAnimationFrame(frame);
+
+/* For the tests (system/dom-app/test/autocue-test.html): feed heard text without a microphone. */
+window.__autocue={load(text){curScript().text=text;build();look();pos=0;setPos(0)},hear,pos:()=>pos,words:()=>W.map(w=>w.n)};
+</script>
+</body></html>
